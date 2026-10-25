@@ -1,4 +1,4 @@
-# Fred TV (Formerly Open TV)
+# Fred TV (Formerly Open TV).-
 
 Completely rewritten to accommodate new features and to be even speedier, Fred TV has been carefully crafted to deliver the best IPTV experience.
 
