@@ -68,14 +68,13 @@ export class ChannelTileComponent implements OnDestroy, AfterViewInit {
 
   setDownloadGradient(progress: number) {
     let element = this.el.nativeElement.querySelector(`#tile-${this.id}`);
-    let background = `linear-gradient(to right, green ${progress}%, #343a40 ${progress}%)`;
+    let background = `linear-gradient(to right, rgba(60, 207, 145, 0.35) ${progress}%, var(--surface) ${progress}%)`;
     this.renderer.setStyle(element, "background", background);
   }
 
   clearDownloadGradient() {
     let element = this.el.nativeElement.querySelector(`#tile-${this.id}`);
-    let background = "#343a40";
-    this.renderer.setStyle(element, "background", background);
+    this.renderer.removeStyle(element, "background");
   }
 
   async click(record = false) {
@@ -213,6 +212,44 @@ export class ChannelTileComponent implements OnDestroy, AfterViewInit {
 
   async record() {
     await this.click(true);
+  }
+
+  isFolder(): boolean {
+    return (
+      this.channel?.media_type == MediaType.group ||
+      this.channel?.media_type == MediaType.serie ||
+      this.channel?.media_type == MediaType.season
+    );
+  }
+
+  kindLabel(): string {
+    switch (this.channel?.media_type) {
+      case MediaType.livestream:
+        return "Live";
+      case MediaType.movie:
+        return "Movie";
+      case MediaType.serie:
+        return "Series";
+      case MediaType.season:
+        return "Season";
+      case MediaType.group:
+        return "Category";
+      default:
+        return "";
+    }
+  }
+
+  kindClass(): string {
+    return this.channel?.media_type == MediaType.livestream ? "live" : "";
+  }
+
+  initials(): string {
+    const words = (this.channel?.name ?? "").replace(/[^\p{L}\p{N} ]/gu, " ").trim().split(/\s+/);
+    return words
+      .slice(0, 2)
+      .map((w) => w[0] ?? "")
+      .join("")
+      .toUpperCase();
   }
 
   isMovie() {

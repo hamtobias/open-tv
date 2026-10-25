@@ -20,6 +20,10 @@ export class Stack {
     return this.nodes[this.nodes.length - 1];
   }
 
+  all(): Node[] {
+    return [...this.nodes];
+  }
+
   hasNodes(): boolean {
     return this.nodes.length > 0;
   }

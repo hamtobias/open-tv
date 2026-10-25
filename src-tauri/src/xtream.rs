@@ -539,6 +539,8 @@ fn is_valid_epg(epg: &EPG, now: &DateTime<Local>) -> Result<bool> {
 fn xtream_epg_to_epg(epg: XtreamEPGItem, url: &Url, stream_id: &str) -> Result<EPG> {
     let start_timestamp =
         get_serde_json_i64(&epg.start_timestamp).context("no valid start timestamp")?;
+    let end_timestamp =
+        get_serde_json_i64(&epg.stop_timestamp).context("no valid end timestamp")?;
     Ok(EPG {
         epg_id: get_serde_json_string(&epg.id).context("no epg id")?,
         title: String::from_utf8(BASE64_STANDARD.decode(&epg.title)?)?,
@@ -546,12 +548,11 @@ fn xtream_epg_to_epg(epg: XtreamEPGItem, url: &Url, stream_id: &str) -> Result<E
         start_time: get_local_time(start_timestamp)?
             .format("%B %d, %H:%M")
             .to_string(),
-        end_time: get_local_time(
-            get_serde_json_i64(&epg.stop_timestamp).context("no valid end timestamp")?,
-        )?
-        .format("%B %d, %H:%M")
-        .to_string(),
+        end_time: get_local_time(end_timestamp)?
+            .format("%B %d, %H:%M")
+            .to_string(),
         start_timestamp,
+        end_timestamp,
         timeshift_url: if epg.has_archive == 1 {
             Some(get_timeshift_url(
                 url.clone(),

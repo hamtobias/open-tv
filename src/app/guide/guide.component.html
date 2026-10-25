@@ -1,0 +1,154 @@
+<div class="shell">
+  <app-sidebar active="guide" [showGuide]="true" (view)="goToView($event)" (settings)="openSettings()"></app-sidebar>
+
+  <div class="main guide-main">
+    <header class="topbar">
+      <div class="g-title">
+        <h1>TV Guide</h1>
+        <span>{{ dayLabel() }}</span>
+      </div>
+
+      <div class="search-box g-search" *ngIf="hasXtream">
+        <svg class="search-icon" viewBox="0 0 24 24">
+          <path
+            d="M9.5 3a6.5 6.5 0 0 1 5.16 10.45l5.45 5.44-1.42 1.42-5.44-5.45A6.5 6.5 0 1 1 9.5 3zm0 2a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z" />
+        </svg>
+        <input #q type="text" class="search-input" placeholder="Find a channel…" autocomplete="off"
+          (input)="onSearch(q.value)" />
+      </div>
+
+      <select *ngIf="hasXtream" class="form-select g-select" (change)="setGroup($any($event.target).value)">
+        <option value="">All categories</option>
+        <option *ngFor="let g of groups" [value]="g.id">{{ g.name }}</option>
+      </select>
+
+      <button *ngIf="hasXtream" type="button" class="chip" [class.on]="favoritesOnly" (click)="toggleFavorites()">
+        ★ Favorites
+      </button>
+
+      <div class="topbar-tools" *ngIf="hasXtream">
+        <button type="button" class="btn btn-primary btn-sm g-now-btn" (click)="scrollToNow()">Now</button>
+      </div>
+    </header>
+
+    <div class="empty-state" *ngIf="!hasXtream">
+      <svg viewBox="0 0 24 24">
+        <path
+          d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 16H5V9h14z" />
+      </svg>
+      <h5>The TV guide needs an Xtream source</h5>
+      <p>Add one in Settings → Add source, then come back here.</p>
+    </div>
+
+    <div #scroller class="guide" *ngIf="hasXtream" (scroll)="onScroll()">
+      <div class="g-inner" [style.width.px]="timelineWidth + 240">
+        <!-- time ruler -->
+        <div class="g-head">
+          <div class="g-corner">Channels</div>
+          <div class="g-ruler" [style.width.px]="timelineWidth">
+            <div *ngFor="let t of ticks" class="g-tick" [class.hour]="t.hour" [style.left.px]="t.left">
+              <span class="g-day" *ngIf="t.day">{{ t.day }}</span>
+              {{ t.label }}
+            </div>
+            <div class="g-now-pill" [style.left.px]="nowOffset">NOW</div>
+          </div>
+        </div>
+
+        <!-- now line -->
+        <div class="g-nowline" [style.left.px]="240 + nowOffset"></div>
+
+        <!-- rows -->
+        <div #row *ngFor="let c of channels; trackBy: trackById" class="g-row" [attr.data-id]="c.id">
+          <div class="g-chan" tabindex="0" (click)="watch(c)" (keyup.enter)="watch(c)"
+            [class.starting]="playingId == c.id" [attr.title]="'Watch ' + c.name">
+            <div class="g-logo">
+              <img *ngIf="c.image" [src]="c.image" loading="lazy" alt="" (error)="c.image = undefined" />
+              <span *ngIf="!c.image">{{ initials(c.name) }}</span>
+            </div>
+            <div class="g-chan-text">
+              <div class="g-chan-name">{{ c.name }}</div>
+              <div class="g-chan-sub">
+                <ng-container *ngIf="playingId == c.id">Starting…</ng-container>
+                <ng-container *ngIf="playingId != c.id && nowPlaying(c) as np">{{ np.epg.title }}</ng-container>
+              </div>
+            </div>
+            <svg *ngIf="c.favorite" class="g-fav" viewBox="0 0 24 24">
+              <path d="M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z" />
+            </svg>
+          </div>
+
+          <div class="g-track" [style.width.px]="timelineWidth">
+            <ng-container [ngSwitch]="epgState.get(c.id!)">
+              <div *ngSwitchCase="'done'">
+                <button type="button" *ngFor="let p of programmes.get(c.id!); trackBy: trackProg" class="g-prog"
+                  [style.left.px]="p.left" [style.width.px]="p.width" [class.live]="isLive(p)" [class.past]="isPast(p)"
+                  [class.sel]="selected?.prog === p" (click)="select(c, p)">
+                  <span class="g-prog-inner">
+                    <span class="g-prog-title">{{ p.epg.title }}</span>
+                    <span class="g-prog-time">
+                      {{ time(p.start) }} – {{ time(p.end) }}
+                      <span class="g-badge" *ngIf="p.epg.has_archive && !isFuture(p)" title="Catch-up">↺</span>
+                      <span class="g-badge" *ngIf="reminderOn(p)" title="Reminder set">🔔</span>
+                    </span>
+                  </span>
+                  <span class="g-prog-bar" *ngIf="isLive(p)" [style.width.%]="progress(p)"></span>
+                </button>
+                <div class="g-none" *ngIf="!programmes.get(c.id!)?.length" [style.left.px]="nowOffset">
+                  No listings for this channel
+                </div>
+              </div>
+              <div *ngSwitchCase="'error'" class="g-none" [style.left.px]="nowOffset">No guide data</div>
+              <div *ngSwitchDefault class="g-skeleton" [style.left.px]="nowOffset - 150"></div>
+            </ng-container>
+          </div>
+        </div>
+
+        <div class="g-more" *ngIf="loading"><div class="spinner"></div></div>
+        <div class="empty-state" *ngIf="!loading && channels.length == 0">
+          <h5>No channels found</h5>
+          <p>Try another category or clear the search.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- details drawer -->
+  <aside class="g-details" *ngIf="selected as s">
+    <button type="button" class="icon-btn g-close" (click)="closeDetails()" aria-label="Close">
+      <svg viewBox="0 0 24 24">
+        <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+      </svg>
+    </button>
+    <div class="g-d-channel">
+      <div class="g-logo sm">
+        <img *ngIf="s.channel.image" [src]="s.channel.image" alt="" />
+        <span *ngIf="!s.channel.image">{{ initials(s.channel.name) }}</span>
+      </div>
+      {{ s.channel.name }}
+    </div>
+    <span class="g-live-tag" *ngIf="isLive(s.prog)">● Live now</span>
+    <h2>{{ s.prog.epg.title }}</h2>
+    <div class="g-d-time">
+      {{ s.prog.epg.start_time }} – {{ time(s.prog.end) }} · {{ durationLabel(s.prog) }}
+    </div>
+    <div class="g-d-progress" *ngIf="isLive(s.prog)">
+      <span [style.width.%]="progress(s.prog)"></span>
+    </div>
+    <p class="g-d-desc selectable">{{ s.prog.epg.description || "No description available." }}</p>
+
+    <div class="g-d-actions">
+      <button type="button" class="btn btn-primary" *ngIf="!isPast(s.prog)" (click)="watch(s.channel)"
+        [disabled]="playingId != undefined">
+        ▶ {{ playingId == s.channel.id ? "Starting…" : "Watch channel" }}
+      </button>
+      <button type="button" class="btn btn-secondary" *ngIf="canCatchUp(s.prog)" (click)="catchUp(s.channel, s.prog)"
+        [disabled]="busy">
+        ↺ {{ busy ? "Opening…" : isLive(s.prog) ? "Watch from start" : "Catch-up" }}
+      </button>
+      <button type="button" class="btn btn-secondary" *ngIf="isFuture(s.prog)" (click)="toggleReminder(s.channel, s.prog)"
+        [disabled]="memory.LoadingNotification">
+        🔔 {{ reminderOn(s.prog) ? "Remove reminder" : "Remind me" }}
+      </button>
+    </div>
+  </aside>
+</div>

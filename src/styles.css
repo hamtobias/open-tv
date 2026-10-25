@@ -2,6 +2,7 @@
 @import "ngx-toastr/toastr";
 @import "@angular/material/prebuilt-themes/pink-bluegrey.css";
 @import "./assets/css/roboto.css";
+@import "./theme.css";
 
 body {
   background-color: #202124;

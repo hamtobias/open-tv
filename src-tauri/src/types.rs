@@ -172,6 +172,7 @@ pub struct EPG {
     pub start_time: String,
     pub start_timestamp: i64,
     pub end_time: String,
+    pub end_timestamp: i64,
     pub timeshift_url: Option<String>,
     pub has_archive: bool,
     pub now_playing: bool,

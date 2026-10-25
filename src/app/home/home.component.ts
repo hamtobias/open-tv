@@ -42,6 +42,7 @@ import { NodeType } from "../models/nodeType";
 import { Stack } from "../models/stack";
 
 import { BulkActionType } from '../models/bulkActionType';
+import { SIDEBAR_VIEWS } from "../sidebar/sidebar.component";
 
 @Component({
   selector: "app-home",
@@ -99,6 +100,11 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
   loading = false;
   nodeStack: Stack = new Stack();
   showScrollTop = false;
+  groups: Channel[] = [];
+  groupsLoading = false;
+  railQuery = "";
+  private railGroupName?: string;
+  private groupsToken = 0;
 
   scrollToTop() {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -155,7 +161,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
           }
           this.filters = {
             source_ids: Array.from(this.memory.Sources.keys()),
-            view_type: settings.default_view ?? ViewMode.All,
+            view_type: this.memory.PendingView ?? settings.default_view ?? ViewMode.All,
             media_types: [MediaType.livestream, MediaType.movie, MediaType.serie],
             page: 1,
             use_keywords: false,
@@ -165,12 +171,14 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
             this.memory.Sort.next([settings.default_sort, false]);
             this.filters.sort = settings.default_sort;
           }
+          this.memory.PendingView = undefined;
           this.chkSerie = this.anyXtream();
           if (settings.refresh_on_start === true && !sessionStorage.getItem("refreshedOnStart")) {
             sessionStorage.setItem("refreshedOnStart", "true");
             this.refreshOnStart().then((_) => _);
           }
           this.load().then((_) => _);
+          if (this.filters.view_type == ViewMode.Categories) this.loadGroups();
         }
       })
       .catch((e) => {
@@ -258,7 +266,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
   }
 
   async loadMore() {
-    this.load(true);
+    await this.load(true);
   }
 
   async load(more = false) {
@@ -434,6 +442,14 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     if (index == -1) this.filters!.media_types.push(mediaType);
     else this.filters!.media_types.splice(index, 1);
     this.load();
+    if (this.filters!.view_type == ViewMode.Categories) this.loadGroups();
+  }
+
+  toggleMedia(mediaType: MediaType) {
+    if (mediaType == MediaType.livestream) this.chkLiveStream = !this.chkLiveStream;
+    else if (mediaType == MediaType.movie) this.chkMovie = !this.chkMovie;
+    else this.chkSerie = !this.chkSerie;
+    this.updateMediaTypes(mediaType);
   }
 
   filtersVisible() {
@@ -446,9 +462,12 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     this.filters!.group_id = undefined;
     this.filters!.view_type = viewMode;
     this.filters!.season = undefined;
+    this.filters!.source_ids = Array.from(this.memory.Sources.keys());
+    this.railGroupName = undefined;
     this.clearSearch();
     this.nodeStack.clear();
     await this.load();
+    if (viewMode == ViewMode.Categories) this.loadGroups();
   }
 
   searchFocused(): boolean {
@@ -487,7 +506,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
         await this.load();
       }
       this.selectFirstChannelDelayed(100);
-    } else if (this.nodeStack.hasNodes()) {
+    } else if (this.canGoBack()) {
       await this.goBack();
       this.selectFirstChannelDelayed(100);
     } else {
@@ -500,6 +519,10 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
   }
 
   async goBack() {
+    if (!this.nodeStack.hasNodes()) {
+      if (this.filters?.group_id) await this.selectCategory();
+      return;
+    }
     var node = this.nodeStack.pop();
     if (node.type == NodeType.Category) this.filters!.group_id = undefined;
     else if (node.type == NodeType.Series) {
@@ -522,52 +545,96 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     this.router.navigateByUrl("settings");
   }
 
+  openGuide() {
+    this.router.navigateByUrl("guide");
+  }
+
   async nav(key: string) {
     if (this.searchFocused()) return;
-    let lowSize = this.currentWindowSize < 768;
-    if (this.memory.currentContextMenu?.menuOpen || this.memory.ModalRef) {
+    if (this.memory.currentContextMenu?.menuOpen || this.memory.ModalRef) return;
+
+    if (this.focusArea == FocusArea.ViewMode) {
+      if (key == "ArrowUp" || key == "ShiftTab") this.focusAt(FocusArea.ViewMode, Math.max(0, this.focus - 1));
+      else if (key == "ArrowDown" || key == "Tab") {
+        if (this.focus + 1 < this.sidebarCount()) this.focusAt(FocusArea.ViewMode, this.focus + 1);
+        else this.focusAt(FocusArea.Tiles, 0);
+      } else if (key == "ArrowRight") this.focusAt(FocusArea.Tiles, 0);
       return;
     }
-    let tmpFocus = 0;
+
+    if (this.focusArea == FocusArea.Filters) {
+      if (key == "ArrowLeft" || key == "ShiftTab") {
+        if (this.focus > 0) this.focusAt(FocusArea.Filters, this.focus - 1);
+        else this.focusSidebar();
+      } else if (key == "ArrowRight" || key == "Tab") {
+        if (this.focus + 1 < this.filterCount()) this.focusAt(FocusArea.Filters, this.focus + 1);
+        else this.focusAt(FocusArea.Tiles, 0);
+      } else if (key == "ArrowDown") this.focusAt(FocusArea.Tiles, 0);
+      return;
+    }
+
+    // Tiles: the grid is responsive, so measure how many tiles fit in a row.
+    const cols = this.tileColumns();
+    let next = this.focus;
     switch (key) {
       case "ArrowUp":
-        tmpFocus -= 3;
+        next -= cols;
         break;
       case "ArrowDown":
-        tmpFocus += 3;
+        next += cols;
         break;
       case "ShiftTab":
       case "ArrowLeft":
-        tmpFocus -= 1;
+        next -= 1;
         break;
       case "Tab":
       case "ArrowRight":
-        tmpFocus += 1;
+        next += 1;
         break;
     }
-    let goOverSize = this.shortFiltersMode() ? 1 : 2;
-    if (lowSize && tmpFocus % 3 == 0 && this.focusArea == FocusArea.Tiles) tmpFocus / 3;
-    tmpFocus += this.focus;
-    if (tmpFocus < 0) {
-      this.changeFocusArea(false);
-    } else if (tmpFocus > goOverSize && this.focusArea == FocusArea.Filters) {
-      this.changeFocusArea(true);
-    } else if (tmpFocus > 4 && this.focusArea == FocusArea.ViewMode) {
-      this.changeFocusArea(true);
-    } else if (
-      this.focusArea == FocusArea.Tiles &&
-      tmpFocus >= this.filters!.page * 36 &&
-      !this.reachedMax
-    )
-      await this.loadMore();
-    else {
-      if (tmpFocus >= this.channels.length && this.focusArea == FocusArea.Tiles)
-        tmpFocus = (this.channels.length == 0 ? 1 : this.channels.length) - 1;
-      this.focus = tmpFocus;
-      setTimeout(() => {
-        document.getElementById(`${FocusAreaPrefix[this.focusArea]}${this.focus}`)?.focus();
-      }, 0);
+    if (key == "ArrowLeft" && this.focus % cols == 0) return this.focusSidebar();
+    if (next < 0) {
+      if (key == "ArrowUp" && this.filtersVisible()) return this.focusAt(FocusArea.Filters, 0);
+      if (key == "ShiftTab") return this.focusSidebar();
+      return;
     }
+    if (next >= this.channels.length) {
+      if (!this.reachedMax && !this.loading) await this.loadMore();
+      next = Math.min(next, this.channels.length - 1);
+      if (next < 0) return;
+    }
+    this.focusAt(FocusArea.Tiles, next);
+  }
+
+  focusAt(area: FocusArea, index: number) {
+    this.focusArea = area;
+    this.focus = index;
+    setTimeout(() => document.getElementById(`${FocusAreaPrefix[area]}${index}`)?.focus(), 0);
+  }
+
+  focusSidebar() {
+    const index = SIDEBAR_VIEWS.findIndex((x) => x.view == this.filters?.view_type);
+    this.focusAt(FocusArea.ViewMode, Math.max(index, 0));
+  }
+
+  tileColumns(): number {
+    const tiles = Array.from(document.querySelectorAll<HTMLElement>(".tile-grid > app-channel-tile"));
+    if (tiles.length < 2) return 1;
+    const top = tiles[0].offsetTop;
+    let cols = 0;
+    for (const tile of tiles) {
+      if (tile.offsetTop != top) break;
+      cols++;
+    }
+    return Math.max(cols, 1);
+  }
+
+  sidebarCount(): number {
+    return SIDEBAR_VIEWS.length + (this.anyXtream() ? 1 : 0) + 1;
+  }
+
+  filterCount(): number {
+    return this.anyXtream() ? 3 : 2;
   }
 
   shortFiltersMode() {
@@ -578,24 +645,102 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     return Array.from(this.memory.Sources.values()).findIndex((x) => x.source_type == SourceType.Xtream) != -1;
   }
 
-  changeFocusArea(down: boolean) {
-    let increment = down ? 1 : -1;
-    this.focusArea += increment;
-    if (this.focusArea == FocusArea.Filters && !this.filtersVisible()) this.focusArea += increment;
-    if (this.focusArea < 0) this.focusArea = 0;
-    this.applyFocusArea(down);
+  /* ---------- Category rail ---------- */
+  showRail(): boolean {
+    return this.filters?.view_type == ViewMode.Categories && !this.filters?.series_id;
   }
 
-  applyFocusArea(down: boolean) {
-    this.focus = down
-      ? 0
-      : this.focusArea == FocusArea.Filters
-        ? this.shortFiltersMode()
-          ? 1
-          : 2
-        : 4;
-    let id = FocusAreaPrefix[this.focusArea] + this.focus;
-    document.getElementById(id)?.focus();
+  async loadGroups() {
+    if (!this.filters) return;
+    const token = ++this.groupsToken;
+    this.groupsLoading = true;
+    const all: Channel[] = [];
+    try {
+      for (let page = 1; page <= 100; page++) {
+        const batch: Channel[] = await invoke("search", {
+          filters: {
+            ...this.filters,
+            view_type: ViewMode.Categories,
+            group_id: undefined,
+            series_id: undefined,
+            season: undefined,
+            query: "",
+            use_keywords: false,
+            source_ids: Array.from(this.memory.Sources.keys()),
+            page,
+          },
+        });
+        if (token != this.groupsToken) return;
+        all.push(...batch);
+        this.groups = [...all];
+        if (batch.length < this.PAGE_SIZE) break;
+      }
+    } catch (e) {
+      this.error.handleError(e);
+    } finally {
+      if (token == this.groupsToken) this.groupsLoading = false;
+    }
+  }
+
+  filteredGroups(): Channel[] {
+    const q = this.railQuery.trim().toLowerCase();
+    if (!q) return this.groups;
+    return this.groups.filter((g) => g.name?.toLowerCase().includes(q));
+  }
+
+  async selectCategory(group?: Channel) {
+    if (!this.filters) return;
+    this.nodeStack.clear();
+    this.filters.series_id = undefined;
+    this.filters.season = undefined;
+    this.filters.source_ids = Array.from(this.memory.Sources.keys());
+    this.filters.group_id = group?.id;
+    this.railGroupName = group?.name;
+    this.clearSearch();
+    await this.load();
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  trackById(index: number, item: Channel) {
+    return item.id ?? index;
+  }
+
+  /* ---------- Headings ---------- */
+  canGoBack(): boolean {
+    return this.nodeStack.hasNodes() || (this.filters?.view_type == ViewMode.Categories && !!this.filters?.group_id);
+  }
+
+  crumbs(): string[] {
+    const view = SIDEBAR_VIEWS.find((x) => x.view == this.filters?.view_type)?.label ?? "All";
+    const list = [view];
+    const nodes = this.nodeStack.all();
+    if (this.railGroupName && this.filters?.group_id && !nodes.some((n) => n.type == NodeType.Category))
+      list.push(this.railGroupName);
+    nodes.forEach((n) => list.push(n.name));
+    return list;
+  }
+
+  pageTitle(): string {
+    const crumbs = this.crumbs();
+    return crumbs[crumbs.length - 1];
+  }
+
+  searchPlaceholder(): string {
+    return `Search ${this.pageTitle()}…`;
+  }
+
+  emptyHint(): string {
+    if (this.filters?.query) return "No results — try a different search or turn on keyword search.";
+    switch (this.filters?.view_type) {
+      case ViewMode.Favorites:
+        return "Right-click anything and choose Favorite to pin it here.";
+      case ViewMode.History:
+        return "Things you watch will show up here.";
+      case ViewMode.Hidden:
+        return "Hidden channels and categories show up here.";
+      default:
+        return "Check that at least one media type is selected.";
+    }
   }
 
   //Temporary solution because the ng-keyboard-shortcuts library doesn't seem to support ESC
@@ -613,8 +758,6 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
       event.preventDefault();
       this.nav(event.shiftKey ? "ShiftTab" : "Tab");
     }
-    if (event.key == "Enter" && this.focusArea == FocusArea.Filters)
-      (document.activeElement as any).click();
   }
 
   selectFirstChannel() {

@@ -44,6 +44,8 @@ export class MemoryService {
   public trayEnabled?: boolean;
   public IsContainer?: boolean;
   public AlwaysAskSave?: boolean;
+  /** View to open when returning to the library from another screen (e.g. the TV guide). */
+  public PendingView?: number;
 
   async tryIPC<T>(
     successMessage: string,
