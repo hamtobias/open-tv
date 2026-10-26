@@ -5,8 +5,9 @@ import { EPG } from "./models/epg";
 import { MediaType } from "./models/mediaType";
 import { MemoryService } from "./memory.service";
 
-const MAX_PARALLEL = 4;
+const MAX_PARALLEL = 6;
 const FRESH_FOR_MS = 30 * 60 * 1000;
+const MIN_LENGTH_S = 2 * 60;
 
 interface CacheEntry {
   data: EPG[];
@@ -19,16 +20,32 @@ interface Job {
   reject: (e: unknown) => void;
 }
 
+/** A programme with cleaned-up times (no overlaps with its neighbours). */
+export interface Slot {
+  epg: EPG;
+  start: number; // unix seconds
+  end: number; // unix seconds
+}
+
+export class EpgCancelled extends Error {}
+
+const norm = (s?: string) => (s ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+const sameTitle = (a: EPG, b: EPG) => norm(a.title) == norm(b.title);
+
 /**
- * Shared, rate-limited access to programme listings. Channel cards and the TV
- * guide both ask for listings here, so each channel is fetched at most once
- * every 30 minutes and never more than a few requests run at the same time.
+ * Shared, rate-limited access to programme listings. Channel cards, the TV
+ * guide and the sports page all ask for listings here, so each channel is
+ * fetched at most once every 30 minutes and only a few requests run at once.
+ *
+ * Two queues: "visible" requests (newest first, so what's on screen wins) and
+ * "background" scans (oldest first) that only run when nothing visible waits.
  */
 @Injectable({ providedIn: "root" })
 export class EpgService {
   private cache = new Map<number, CacheEntry>();
   private pending = new Map<number, Promise<EPG[]>>();
-  private queue: Job[] = [];
+  private visible: Job[] = [];
+  private background: Job[] = [];
   private inFlight = 0;
 
   private observer?: IntersectionObserver;
@@ -49,24 +66,45 @@ export class EpgService {
     );
   }
 
-  get(channel: Channel): Promise<EPG[]> {
+  /** Listings already fetched (and still fresh) for a channel, without fetching. */
+  peek(channel: Channel): EPG[] | undefined {
+    const cached = this.cache.get(channel.id!);
+    return cached && Date.now() - cached.fetched < FRESH_FOR_MS ? cached.data : undefined;
+  }
+
+  get(channel: Channel, background = false): Promise<EPG[]> {
     const id = channel.id!;
-    const cached = this.cache.get(id);
-    if (cached && Date.now() - cached.fetched < FRESH_FOR_MS) return Promise.resolve(cached.data);
+    const cached = this.peek(channel);
+    if (cached) return Promise.resolve(cached);
     const pending = this.pending.get(id);
-    if (pending) return pending;
+    if (pending) {
+      // Someone on screen now wants a channel that was only queued in the background: bump it.
+      if (!background) this.promote(id);
+      return pending;
+    }
     const promise = new Promise<EPG[]>((resolve, reject) => {
-      this.queue.push({ channel, resolve, reject });
+      (background ? this.background : this.visible).push({ channel, resolve, reject });
       this.pump();
     }).finally(() => this.pending.delete(id));
     this.pending.set(id, promise);
     return promise;
   }
 
-  /** Visible channels first: newer requests jump ahead of ones scrolled past. */
+  /** Drops queued background requests (e.g. when leaving the sports page). */
+  cancelBackground() {
+    const jobs = this.background;
+    this.background = [];
+    jobs.forEach((j) => j.reject(new EpgCancelled()));
+  }
+
+  private promote(id: number) {
+    const index = this.background.findIndex((j) => j.channel.id == id);
+    if (index >= 0) this.visible.push(...this.background.splice(index, 1));
+  }
+
   private pump() {
-    while (this.inFlight < MAX_PARALLEL && this.queue.length > 0) {
-      const job = this.queue.pop()!;
+    while (this.inFlight < MAX_PARALLEL && (this.visible.length > 0 || this.background.length > 0)) {
+      const job = this.visible.length > 0 ? this.visible.pop()! : this.background.shift()!;
       this.inFlight++;
       invoke<EPG[]>("get_epg", { channel: job.channel })
         .then((data) => {
@@ -81,20 +119,39 @@ export class EpgService {
     }
   }
 
-  /** The programme airing right now, if any. */
-  static current(list: EPG[], at = Date.now() / 1000): EPG | undefined {
-    const sorted = [...list].sort((a, b) => a.start_timestamp - b.start_timestamp);
-    for (let i = 0; i < sorted.length; i++) {
-      const start = sorted[i].start_timestamp;
-      const end = EpgService.end(sorted, i);
-      if (start <= at && at < end) return sorted[i];
-    }
-    return undefined;
+  /**
+   * Sorted, non-overlapping programmes. Providers often send duplicates or
+   * entries that overlap (e.g. 17:30–20:00 and 18:00–20:00 for the same match);
+   * an exact duplicate start is dropped and an earlier entry is cut off where the
+   * next one begins, so nothing is drawn on top of anything else.
+   */
+  static slots(list: EPG[]): Slot[] {
+    const sorted = [...list].sort((a, b) => a.start_timestamp - b.start_timestamp || (b.end_timestamp ?? 0) - (a.end_timestamp ?? 0));
+    const out: Slot[] = [];
+    sorted.forEach((epg, i) => {
+      const start = epg.start_timestamp;
+      let end = epg.end_timestamp;
+      if (end == undefined || end <= start) {
+        const next = sorted.slice(i + 1).find((x) => x.start_timestamp > start);
+        end = next?.start_timestamp ?? start + 30 * 60;
+      }
+      const last = out[out.length - 1];
+      if (last && start < last.end) {
+        if (start - last.start < MIN_LENGTH_S || sameTitle(last.epg, epg)) {
+          // Same slot listed twice: keep the first, but let it run as long as the longer one.
+          last.end = Math.max(last.end, end);
+          return;
+        }
+        last.end = start;
+      }
+      out.push({ epg, start, end });
+    });
+    return out.filter((s) => s.end - s.start >= MIN_LENGTH_S);
   }
 
-  /** End time of entry i, falling back to the next programme's start. */
-  static end(sorted: EPG[], i: number): number {
-    return sorted[i].end_timestamp ?? sorted[i + 1]?.start_timestamp ?? sorted[i].start_timestamp + 30 * 60;
+  /** The programme airing right now, if any. */
+  static current(list: EPG[], at = Date.now() / 1000): Slot | undefined {
+    return EpgService.slots(list).find((s) => s.start <= at && at < s.end);
   }
 
   /** Calls `visible` once, the first time `el` scrolls near the viewport. */

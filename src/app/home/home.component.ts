@@ -43,6 +43,7 @@ import { Stack } from "../models/stack";
 
 import { BulkActionType } from '../models/bulkActionType';
 import { SIDEBAR_VIEWS } from "../sidebar/sidebar.component";
+import { CountryGroup, countryOf, groupByCountry, OTHER_COUNTRY, withoutCountry } from "../countries";
 
 @Component({
   selector: "app-home",
@@ -105,6 +106,10 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
   railQuery = "";
   private railGroupName?: string;
   private groupsToken = 0;
+  /** The one country expanded in the category rail (all closed by default). */
+  openCountry?: string;
+  private countryGroups: CountryGroup<Channel>[] = [];
+  private railCache?: { query: string; groups: CountryGroup<Channel>[] };
 
   scrollToTop() {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -441,6 +446,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     if (this.filters.view_type == ViewMode.Categories) {
       this.filters.group_id = undefined;
       this.railGroupName = undefined;
+      this.openCountry = undefined;
       this.nodeStack.clear();
     }
     await this.load();
@@ -481,6 +487,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     this.filters!.season = undefined;
     this.filters!.source_ids = Array.from(this.memory.Sources.keys());
     this.railGroupName = undefined;
+    this.openCountry = undefined;
     this.clearSearch();
     this.nodeStack.clear();
     await this.load();
@@ -566,6 +573,10 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     this.router.navigateByUrl("guide");
   }
 
+  openSports() {
+    this.router.navigateByUrl("sports");
+  }
+
   async nav(key: string) {
     if (this.searchFocused()) return;
     if (this.memory.currentContextMenu?.menuOpen || this.memory.ModalRef) return;
@@ -646,7 +657,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
   }
 
   sidebarCount(): number {
-    return SIDEBAR_VIEWS.length + (this.anyXtream() ? 1 : 0) + 1;
+    return SIDEBAR_VIEWS.length + (this.anyXtream() ? 2 : 0) + 1;
   }
 
   filterCount(): number {
@@ -688,7 +699,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
         });
         if (token != this.groupsToken) return;
         all.push(...batch);
-        this.groups = [...all];
+        this.setGroups([...all]);
         if (batch.length < this.PAGE_SIZE) break;
       }
     } catch (e) {
@@ -698,10 +709,51 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  filteredGroups(): Channel[] {
+  private setGroups(groups: Channel[]) {
+    this.groups = groups;
+    this.countryGroups = groupByCountry(groups, (g) => g.name);
+    this.railCache = undefined;
+  }
+
+  /** Grouping only helps when the provider actually names countries. */
+  railGrouped(): boolean {
+    return this.countryGroups.length > 1 || (this.countryGroups.length == 1 && this.countryGroups[0].country != OTHER_COUNTRY);
+  }
+
+  railCountries(): CountryGroup<Channel>[] {
     const q = this.railQuery.trim().toLowerCase();
-    if (!q) return this.groups;
-    return this.groups.filter((g) => g.name?.toLowerCase().includes(q));
+    if (this.railCache?.query === q && this.railCache.groups.length <= this.countryGroups.length) {
+      if (!q) return this.countryGroups;
+      return this.railCache.groups;
+    }
+    const groups = !q
+      ? this.countryGroups
+      : this.countryGroups
+          .map((cg) => ({
+            country: cg.country,
+            items: cg.country.name.toLowerCase().includes(q)
+              ? cg.items
+              : cg.items.filter((g) => g.name?.toLowerCase().includes(q)),
+          }))
+          .filter((cg) => cg.items.length > 0);
+    this.railCache = { query: q, groups };
+    return groups;
+  }
+
+  isCountryOpen(key: string): boolean {
+    return !!this.railQuery.trim() || this.openCountry == key;
+  }
+
+  toggleCountry(key: string) {
+    this.openCountry = this.openCountry == key ? undefined : key;
+  }
+
+  railLabel(group: Channel): string {
+    return withoutCountry(group.name);
+  }
+
+  trackCountry(_: number, cg: CountryGroup<Channel>) {
+    return cg.country.key;
   }
 
   async selectCategory(group?: Channel) {
@@ -712,6 +764,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     this.filters.source_ids = Array.from(this.memory.Sources.keys());
     this.filters.group_id = group?.id;
     this.railGroupName = group?.name;
+    if (group) this.openCountry = (countryOf(group.name) ?? OTHER_COUNTRY).key;
     this.clearSearch();
     await this.load();
     window.scrollTo({ top: 0, behavior: "instant" });
@@ -730,8 +783,11 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     const view = SIDEBAR_VIEWS.find((x) => x.view == this.filters?.view_type)?.label ?? "All";
     const list = [view];
     const nodes = this.nodeStack.all();
-    if (this.railGroupName && this.filters?.group_id && !nodes.some((n) => n.type == NodeType.Category))
-      list.push(this.railGroupName);
+    if (this.railGroupName && this.filters?.group_id && !nodes.some((n) => n.type == NodeType.Category)) {
+      const country = countryOf(this.railGroupName);
+      if (country) list.push(country.name, withoutCountry(this.railGroupName));
+      else list.push(this.railGroupName);
+    }
     nodes.forEach((n) => list.push(n.name));
     return list;
   }

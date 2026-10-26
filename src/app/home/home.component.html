@@ -3,7 +3,8 @@
 
 <div class="shell">
   <app-sidebar [active]="filters?.view_type ?? viewModeEnum.All" [showGuide]="anyXtream()"
-    (view)="switchMode($event)" (guide)="openGuide()" (settings)="openSettings()"></app-sidebar>
+    (view)="switchMode($event)" (guide)="openGuide()" (sports)="openSports()"
+    (settings)="openSettings()"></app-sidebar>
 
   <div class="main">
     <!-- ======= Top bar: search, media filters, tools ======= -->
@@ -70,10 +71,23 @@
             <span>All categories</span>
             <small>{{ groups.length }}</small>
           </button>
-          <button type="button" *ngFor="let g of filteredGroups(); trackBy: trackById" class="rail-item"
-            [class.active]="filters?.group_id == g.id" (click)="selectCategory(g)" [attr.title]="g.name">
-            <span>{{ g.name }}</span>
-          </button>
+          <ng-container *ngFor="let cg of railCountries(); trackBy: trackCountry">
+            <button type="button" class="rail-country" *ngIf="railGrouped()" [class.open]="isCountryOpen(cg.country.key)"
+              (click)="toggleCountry(cg.country.key)" [attr.aria-expanded]="isCountryOpen(cg.country.key)">
+              <svg class="disclosure" viewBox="0 0 24 24"><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" /></svg>
+              <app-flag [country]="cg.country"></app-flag>
+              <span>{{ cg.country.name }}</span>
+              <small>{{ cg.items.length }}</small>
+            </button>
+            <div class="rail-sub" *ngIf="!railGrouped() || isCountryOpen(cg.country.key)">
+              <button type="button" *ngFor="let g of cg.items; trackBy: trackById" class="rail-item"
+                [class.nested]="railGrouped()" [class.active]="filters?.group_id == g.id" (click)="selectCategory(g)"
+                [attr.title]="g.name">
+                <span>{{ railGrouped() ? railLabel(g) : g.name }}</span>
+              </button>
+            </div>
+          </ng-container>
+          <div class="rail-empty" *ngIf="!groupsLoading && railQuery && railCountries().length == 0">No matches</div>
           <div class="rail-loading" *ngIf="groupsLoading"><div class="spinner"></div></div>
         </div>
       </nav>

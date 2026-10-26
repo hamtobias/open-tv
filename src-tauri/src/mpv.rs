@@ -33,6 +33,8 @@ const ARG_HWDEC: &str = "--hwdec=auto";
 const ARG_GPU_NEXT: &str = "--vo=gpu-next";
 const ARG_GPU_PROFILE_HIGH_QUALITY: &str = "--profile=high-quality";
 const ARG_NO_RESUME_PLAYBACK: &str = "--no-resume-playback";
+// Starts with subtitles hidden; they can still be turned on in mpv (press "j").
+const ARG_NO_SUBTITLES: &str = "--sid=no";
 const MPV_BIN_NAME: &str = "mpv";
 const YTDLP_BIN_NAME: &str = "yt-dlp";
 const HTTP_ORIGIN: &str = "origin:";
@@ -165,6 +167,9 @@ fn get_play_args(
     }
     if settings.enable_hwdec.unwrap_or(true) {
         args.push(ARG_HWDEC.to_string());
+    }
+    if !settings.enable_subtitles.unwrap_or(false) {
+        args.push(ARG_NO_SUBTITLES.to_string());
     }
     if settings.enable_gpu.unwrap_or(false) {
         args.push(ARG_GPU_NEXT.to_string());

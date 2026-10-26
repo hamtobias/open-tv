@@ -1,5 +1,6 @@
 <div class="shell">
-  <app-sidebar active="guide" [showGuide]="true" (view)="goToView($event)" (settings)="openSettings()"></app-sidebar>
+  <app-sidebar active="guide" [showGuide]="true" (view)="goToView($event)" (sports)="openSports()"
+    (settings)="openSettings()"></app-sidebar>
 
   <div class="main guide-main">
     <header class="topbar">
@@ -19,12 +20,17 @@
 
       <select *ngIf="hasXtream" class="form-select g-select" (change)="setGroup($any($event.target).value)">
         <option value="">All categories</option>
-        <option *ngFor="let g of groups" [value]="g.id">{{ g.name }}</option>
+        <optgroup *ngFor="let cg of countryGroups" [label]="cg.country.name">
+          <option *ngFor="let g of cg.items" [value]="g.id">{{ groupLabel(g) }}</option>
+        </optgroup>
       </select>
 
-      <button *ngIf="hasXtream" type="button" class="chip" [class.on]="favoritesOnly" (click)="toggleFavorites()">
-        ★ Favorites
-      </button>
+      <div class="segmented" *ngIf="hasXtream" role="radiogroup" aria-label="Channels">
+        <button type="button" class="seg" role="radio" [class.on]="favoritesOnly" [attr.aria-checked]="favoritesOnly"
+          (click)="!favoritesOnly && toggleFavorites()">Favorites</button>
+        <button type="button" class="seg" role="radio" [class.on]="!favoritesOnly" [attr.aria-checked]="!favoritesOnly"
+          (click)="favoritesOnly && toggleFavorites()">All channels</button>
+      </div>
 
       <div class="topbar-tools" *ngIf="hasXtream">
         <button type="button" class="btn btn-primary btn-sm g-now-btn" (click)="scrollToNow()">Now</button>
@@ -105,8 +111,18 @@
 
         <div class="g-more" *ngIf="loading"><div class="spinner"></div></div>
         <div class="empty-state" *ngIf="!loading && channels.length == 0">
-          <h5>No channels found</h5>
-          <p>Try another category or clear the search.</p>
+          <ng-container *ngIf="favoritesOnly && !query && groupId == undefined; else noMatch">
+            <h5>No favourite channels yet</h5>
+            <p>Right-click a channel in the library and choose Favorite, or browse everything.</p>
+            <button type="button" class="btn btn-primary btn-sm mt-3" (click)="showAllChannels()">Show all channels</button>
+          </ng-container>
+          <ng-template #noMatch>
+            <h5>No channels found</h5>
+            <p>Try another category or clear the search.</p>
+            <button *ngIf="favoritesOnly" type="button" class="btn btn-secondary btn-sm mt-3" (click)="showAllChannels()">
+              Search all channels
+            </button>
+          </ng-template>
         </div>
       </div>
     </div>
@@ -129,7 +145,7 @@
     <span class="g-live-tag" *ngIf="isLive(s.prog)">● Live now</span>
     <h2>{{ s.prog.epg.title }}</h2>
     <div class="g-d-time">
-      {{ s.prog.epg.start_time }} – {{ time(s.prog.end) }} · {{ durationLabel(s.prog) }}
+      {{ dayOf(s.prog.start) }} {{ time(s.prog.start) }} – {{ time(s.prog.end) }} · {{ durationLabel(s.prog) }}
     </div>
     <div class="g-d-progress" *ngIf="isLive(s.prog)">
       <span [style.width.%]="progress(s.prog)"></span>

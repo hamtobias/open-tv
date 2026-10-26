@@ -33,6 +33,8 @@ import { SortItemComponent } from './home/sort-button/sort-item/sort-item.compon
 import { DownloadManagerComponent } from './download-manager/download-manager.component';
 import { SidebarComponent } from './sidebar/sidebar.component';
 import { GuideComponent } from './guide/guide.component';
+import { SportsComponent } from './sports/sports.component';
+import { FlagComponent } from './flag/flag.component';
 
 import { TimeAgoPipe } from "./pipes/time-ago.pipe";
 import { TimeUntilPipe } from './pipes/time-until.pipe';
@@ -66,6 +68,8 @@ import { TimeUntilPipe } from './pipes/time-until.pipe';
     DownloadManagerComponent,
     SidebarComponent,
     GuideComponent,
+    SportsComponent,
+    FlagComponent,
   ],
   imports: [
     BrowserModule,

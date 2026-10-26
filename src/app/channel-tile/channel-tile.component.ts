@@ -65,6 +65,7 @@ export class ChannelTileComponent implements OnDestroy, AfterViewInit {
   fade = false;
   /** Programme on air right now (Xtream livestreams only). */
   now?: EPG;
+  private nowStart = 0;
   private nowEnd = 0;
   private nowTimer?: ReturnType<typeof setTimeout>;
 
@@ -83,24 +84,24 @@ export class ChannelTileComponent implements OnDestroy, AfterViewInit {
   }
 
   private applyNow(list: EPG[]) {
-    const sorted = [...list].sort((a, b) => a.start_timestamp - b.start_timestamp);
-    this.now = EpgService.current(sorted);
+    const slot = EpgService.current(list);
+    this.now = slot?.epg;
     if (this.nowTimer) clearTimeout(this.nowTimer);
-    if (!this.now) return;
-    this.nowEnd = EpgService.end(sorted, sorted.indexOf(this.now));
+    if (!slot) return;
+    this.nowStart = slot.start;
+    this.nowEnd = slot.end;
     const ms = (this.nowEnd - Date.now() / 1000) * 1000 + 1000;
     // When this programme ends, move on to the next one (refetching if the cached list ran out).
     if (ms > 0 && ms < 6 * 3600 * 1000)
       this.nowTimer = setTimeout(() => {
-        const next = EpgService.current(sorted);
-        if (next) this.applyNow(sorted);
+        if (EpgService.current(list)) this.applyNow(list);
         else this.loadNow();
       }, ms);
   }
 
   nowProgress(): number {
     if (!this.now) return 0;
-    const start = this.now.start_timestamp;
+    const start = this.nowStart;
     const pct = ((Date.now() / 1000 - start) / (this.nowEnd - start)) * 100;
     return Math.min(100, Math.max(0, pct));
   }

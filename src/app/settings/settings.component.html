@@ -141,6 +141,20 @@
   <div class="row mt-3 align-items-center">
     <div class="col-4">
       <span [ngbTooltip]="
+          'When off, videos start without subtitles. You can still turn them on while watching by pressing j in the player.'
+        ">Show subtitles by default</span>
+    </div>
+    <div class="col">
+      <div class="form-check form-switch">
+        <input [(ngModel)]="settings.enable_subtitles" (ngModelChange)="updateSettings()" class="form-check-input"
+          type="checkbox" />
+      </div>
+    </div>
+  </div>
+
+  <div class="row mt-3 align-items-center">
+    <div class="col-4">
+      <span [ngbTooltip]="
           'Opens the file dialog for all downloads and recordings. Overrides recording path. '
         ">Always ask where to save downloads</span>
     </div>

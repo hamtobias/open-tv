@@ -42,10 +42,11 @@ export const SIDEBAR_VIEWS: SidebarItem[] = [
 })
 export class SidebarComponent {
   readonly items = SIDEBAR_VIEWS;
-  /** Active library view, or "guide" when the TV guide is open. */
-  @Input() active: ViewMode | "guide" = ViewMode.All;
+  /** Active library view, or the live screen that is open. */
+  @Input() active: ViewMode | "guide" | "sports" = ViewMode.All;
   @Input() showGuide = false;
   @Output() view = new EventEmitter<ViewMode>();
   @Output() guide = new EventEmitter<void>();
+  @Output() sports = new EventEmitter<void>();
   @Output() settings = new EventEmitter<void>();
 }

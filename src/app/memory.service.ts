@@ -9,6 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { SortType } from "./models/sortType";
 import { LAST_SEEN_VERSION } from "./models/localStorage";
 import { SetNodeDTO } from "./models/setNodeDTO";
+import { SourceType } from "./models/sourceType";
 
 @Injectable({
   providedIn: "root",
@@ -93,6 +94,23 @@ export class MemoryService {
 
   setLastDownloadProgress(id: number, progress: number) {
     this.downloadingChannels.get(id)![0] = progress;
+  }
+
+  /** Loads the enabled sources if no screen has done so yet (e.g. when opening straight into a sub-page). */
+  async ensureSources() {
+    if (this.Sources.size > 0) return;
+    try {
+      const sources = (await invoke("get_sources")) as Source[];
+      this.Sources = new Map(sources.filter((x) => x.enabled).map((s) => [s.id!, s]));
+      sources
+        .filter((x) => x.source_type == SourceType.Xtream)
+        .forEach((x) => this.XtreamSourceIds.add(x.id!));
+      sources
+        .filter((x) => x.source_type == SourceType.Custom)
+        .forEach((x) => this.CustomSourceIds.add(x.id!));
+    } catch (e) {
+      this.error.handleError(e);
+    }
   }
 
   updateVersion() {

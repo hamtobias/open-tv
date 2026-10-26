@@ -18,11 +18,11 @@ import { Channel } from "../models/channel";
 import { EPG } from "../models/epg";
 import { EPGNotify } from "../models/epgNotify";
 import { MediaType } from "../models/mediaType";
-import { Source } from "../models/source";
 import { SourceType } from "../models/sourceType";
 import { SortType } from "../models/sortType";
 import { ViewMode } from "../models/viewMode";
 import { EpgService } from "../epg.service";
+import { CountryGroup, groupByCountry, withoutCountry } from "../countries";
 
 /** One programme block positioned on the timeline. */
 export interface GuideProgramme {
@@ -62,7 +62,8 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
   channels: Channel[] = [];
   groups: Channel[] = [];
   groupId?: number;
-  favoritesOnly = false;
+  /** Favourites first: the guide opens on your own channels. */
+  favoritesOnly = true;
   query = "";
   page = 1;
   reachedMax = false;
@@ -128,17 +129,9 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
   /* ---------------- data ---------------- */
 
   private async ensureSources() {
-    if (this.memory.Sources.size > 0) return;
-    try {
-      const sources: Source[] = await invoke("get_sources");
-      this.memory.Sources = new Map(sources.filter((x) => x.enabled).map((s) => [s.id!, s]));
-      sources
-        .filter((x) => x.source_type == SourceType.Xtream)
-        .forEach((x) => this.memory.XtreamSourceIds.add(x.id!));
-    } catch (e) {
-      this.error.handleError(e);
-    }
+    await this.memory.ensureSources();
   }
+
 
   private xtreamIds(): number[] {
     return Array.from(this.memory.Sources.values())
@@ -230,25 +223,21 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
   }
 
   private layout(data: EPG[]): GuideProgramme[] {
-    const sorted = [...data].sort((a, b) => a.start_timestamp - b.start_timestamp);
     const windowEnd = this.windowStart + WINDOW_LENGTH_MIN * 60;
-    const out: GuideProgramme[] = [];
-    sorted.forEach((epg, i) => {
-      const start = epg.start_timestamp;
-      const end = epg.end_timestamp ?? sorted[i + 1]?.start_timestamp ?? start + 30 * 60;
-      if (end <= this.windowStart || start >= windowEnd || end <= start) return;
-      const from = Math.max(start, this.windowStart);
-      const to = Math.min(end, windowEnd);
-      out.push({
-        epg,
-        start,
-        end,
-        left: ((from - this.windowStart) / 60) * PX_PER_MIN,
-        width: ((to - from) / 60) * PX_PER_MIN,
+    return EpgService.slots(data)
+      .filter((p) => p.end > this.windowStart && p.start < windowEnd)
+      .map((p) => {
+        const from = Math.max(p.start, this.windowStart);
+        const to = Math.min(p.end, windowEnd);
+        return {
+          ...p,
+          left: ((from - this.windowStart) / 60) * PX_PER_MIN,
+          // a hairline gap so neighbouring blocks never touch
+          width: Math.max(((to - from) / 60) * PX_PER_MIN - 2, 4),
+        };
       });
-    });
-    return out;
   }
+
 
   /* ---------------- timeline ---------------- */
 
@@ -312,6 +301,13 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
   durationLabel(p: GuideProgramme): string {
     const min = Math.round((p.end - p.start) / 60);
     return min >= 60 ? `${Math.floor(min / 60)}h ${min % 60 ? (min % 60) + "m" : ""}`.trim() : `${min}m`;
+  }
+
+  dayOf(ts: number): string {
+    const d = new Date(ts * 1000);
+    const today = new Date();
+    if (d.toDateString() == today.toDateString()) return "Today";
+    return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
   }
 
   dayLabel(): string {
@@ -438,6 +434,29 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
   }
 
   /* ---------------- navigation ---------------- */
+
+  showAllChannels() {
+    this.favoritesOnly = false;
+    this.reload();
+  }
+
+  get countryGroups() {
+    if (this.groupsSource !== this.groups) {
+      this.groupsSource = this.groups;
+      this.grouped = groupByCountry(this.groups, (g) => g.name);
+    }
+    return this.grouped;
+  }
+  private groupsSource?: Channel[];
+  private grouped: CountryGroup<Channel>[] = [];
+
+  groupLabel(g: Channel): string {
+    return withoutCountry(g.name);
+  }
+
+  openSports() {
+    this.router.navigateByUrl("sports");
+  }
 
   goToView(view: ViewMode) {
     this.memory.PendingView = view;
