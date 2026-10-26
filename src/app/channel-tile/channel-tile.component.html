@@ -12,10 +12,15 @@
   </div>
   <div class="meta">
     <div class="title">{{ channel?.name }}</div>
-    <div class="sub">
-      <span class="kind" [ngClass]="kindClass()">{{ kindLabel() }}</span>
+    <div class="sub" *ngIf="!now">
+      <span class="kind">{{ kindLabel() }}</span>
       <span class="source">{{ getSourceName() }}</span>
     </div>
+    <div class="sub now" *ngIf="now" [attr.title]="now.title">
+      <span class="kind live">Live</span>
+      <span class="source">{{ now.title }}</span>
+    </div>
+    <div class="now-bar" *ngIf="now"><span [style.width.%]="nowProgress()"></span></div>
   </div>
   <div class="flags">
     <svg *ngIf="channel?.favorite" class="fav" viewBox="0 0 24 24">
@@ -29,9 +34,6 @@
     <svg *ngIf="isFolder()" class="chev" viewBox="0 0 24 24">
       <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
     </svg>
-    <span class="play-hint" *ngIf="!isFolder()">
-      <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-    </span>
   </div>
 </div>
 

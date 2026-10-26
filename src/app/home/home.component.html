@@ -25,17 +25,11 @@
         </svg>
       </button>
 
-      <div class="chips" *ngIf="filtersVisible()">
-        <button type="button" id="filter-0" class="chip" [class.on]="chkLiveStream"
-          (click)="toggleMedia(mediaTypeEnum.livestream)">
-          <span class="dot live"></span> Live
-        </button>
-        <button type="button" id="filter-1" class="chip" [class.on]="chkMovie" (click)="toggleMedia(mediaTypeEnum.movie)">
-          {{ anyXtream() ? "Movies" : "Movies & Series" }}
-        </button>
-        <button *ngIf="anyXtream()" type="button" id="filter-2" class="chip" [class.on]="chkSerie"
-          (click)="toggleMedia(mediaTypeEnum.serie)">
-          Series
+      <div class="segmented" role="radiogroup" aria-label="Media type" *ngIf="filtersVisible()">
+        <button type="button" *ngFor="let o of visibleMediaOptions(); let i = index" [id]="'filter-' + i"
+          class="seg" role="radio" [attr.aria-checked]="activeMedia == o.type" [class.on]="activeMedia == o.type"
+          (click)="selectMedia(o.type)">
+          {{ o.label }}
         </button>
       </div>
 
@@ -100,6 +94,9 @@
               </ng-container>
             </div>
             <h1>{{ pageTitle() }}</h1>
+            <div class="page-count" *ngIf="channels.length > 0">
+              {{ channels.length | number }} {{ countNoun() }}<ng-container *ngIf="loading">…</ng-container>
+            </div>
           </div>
         </div>
 
@@ -118,10 +115,9 @@
           <p>{{ emptyHint() }}</p>
         </div>
 
-        <button [@fade]="channelsVisible ? 'visible' : 'hidden'" *ngIf="reachedMax === false && channels.length > 0"
-          (click)="loadMore()" class="btn btn-outline-primary mx-auto d-block my-4">
-          Load more
-        </button>
+        <div class="loading-more" *ngIf="loading && channels.length > 0">
+          <div class="spinner"></div>
+        </div>
       </section>
     </div>
   </div>

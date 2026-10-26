@@ -31,6 +31,7 @@ import { NodeType, fromMediaType } from "../models/nodeType";
 
 import { ViewMode } from "../models/viewMode";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { EpgService } from "../epg.service";
 
 @Component({
   selector: "app-channel-tile",
@@ -46,6 +47,7 @@ export class ChannelTileComponent implements OnDestroy, AfterViewInit {
     private el: ElementRef,
     private renderer: Renderer2,
     private download: DownloadService,
+    private epg: EpgService,
   ) { }
   @Input() channel?: Channel;
   @Input() id!: number;
@@ -61,9 +63,46 @@ export class ChannelTileComponent implements OnDestroy, AfterViewInit {
   viewModeEnum = ViewMode;
   subscriptions: Subscription[] = [];
   fade = false;
+  /** Programme on air right now (Xtream livestreams only). */
+  now?: EPG;
+  private nowEnd = 0;
+  private nowTimer?: ReturnType<typeof setTimeout>;
 
   ngAfterViewInit(): void {
     this.getExistingDownload();
+    if (this.epg.supports(this.channel)) {
+      this.epg.whenVisible(this.el.nativeElement, () => this.loadNow());
+    }
+  }
+
+  private loadNow() {
+    this.epg
+      .get(this.channel!)
+      .then((list) => this.applyNow(list))
+      .catch(() => (this.now = undefined));
+  }
+
+  private applyNow(list: EPG[]) {
+    const sorted = [...list].sort((a, b) => a.start_timestamp - b.start_timestamp);
+    this.now = EpgService.current(sorted);
+    if (this.nowTimer) clearTimeout(this.nowTimer);
+    if (!this.now) return;
+    this.nowEnd = EpgService.end(sorted, sorted.indexOf(this.now));
+    const ms = (this.nowEnd - Date.now() / 1000) * 1000 + 1000;
+    // When this programme ends, move on to the next one (refetching if the cached list ran out).
+    if (ms > 0 && ms < 6 * 3600 * 1000)
+      this.nowTimer = setTimeout(() => {
+        const next = EpgService.current(sorted);
+        if (next) this.applyNow(sorted);
+        else this.loadNow();
+      }, ms);
+  }
+
+  nowProgress(): number {
+    if (!this.now) return 0;
+    const start = this.now.start_timestamp;
+    const pct = ((Date.now() / 1000 - start) / (this.nowEnd - start)) * 100;
+    return Math.min(100, Math.max(0, pct));
   }
 
   setDownloadGradient(progress: number) {
@@ -485,5 +524,7 @@ export class ChannelTileComponent implements OnDestroy, AfterViewInit {
 
   ngOnDestroy() {
     this.subscriptions.forEach((x) => x.unsubscribe());
+    this.epg.unobserve(this.el.nativeElement);
+    if (this.nowTimer) clearTimeout(this.nowTimer);
   }
 }

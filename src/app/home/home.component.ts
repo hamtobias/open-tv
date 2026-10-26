@@ -35,7 +35,7 @@ import { SortType } from "../models/sortType";
 import { getVersion } from "@tauri-apps/api/app";
 import { NgbModal } from "@ng-bootstrap/ng-bootstrap";
 import { WhatsNewModalComponent } from "../whats-new-modal/whats-new-modal.component";
-import { LAST_SEEN_VERSION } from "../models/localStorage";
+import { LAST_MEDIA_TYPE, LAST_SEEN_VERSION } from "../models/localStorage";
 import { isInputFocused } from "../utils";
 import { Node } from "../models/node";
 import { NodeType } from "../models/nodeType";
@@ -90,10 +90,10 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
   currentWindowSize: number = window.innerWidth;
   subscriptions: Subscription[] = [];
   filters?: Filters;
-  chkLiveStream = true;
-  chkMovie = true;
-  chkSerie = true;
+  /** The single media type shown (Live, Movies or Series). */
+  activeMedia: MediaType = MediaType.livestream;
   reachedMax = false;
+  private loadToken = 0;
   readonly PAGE_SIZE = 36;
   channelsVisible = true;
   prevSearchValue: String = "";
@@ -162,7 +162,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
           this.filters = {
             source_ids: Array.from(this.memory.Sources.keys()),
             view_type: this.memory.PendingView ?? settings.default_view ?? ViewMode.All,
-            media_types: [MediaType.livestream, MediaType.movie, MediaType.serie],
+            media_types: [this.activeMedia],
             page: 1,
             use_keywords: false,
             sort: SortType.provider,
@@ -172,7 +172,8 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
             this.filters.sort = settings.default_sort;
           }
           this.memory.PendingView = undefined;
-          this.chkSerie = this.anyXtream();
+          this.activeMedia = this.restoreMedia();
+          this.filters.media_types = [this.activeMedia];
           if (settings.refresh_on_start === true && !sessionStorage.getItem("refreshedOnStart")) {
             sessionStorage.setItem("refreshedOnStart", "true");
             this.refreshOnStart().then((_) => _);
@@ -265,32 +266,41 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     this.filters!.query = "";
   }
 
-  async loadMore() {
-    await this.load(true);
-  }
+  /** Kept for callers from before everything was loaded up front; nothing more to fetch. */
+  async loadMore() {}
 
-  async load(more = false) {
+  /**
+   * Loads every page of the current view. The first page is shown right away and
+   * the rest are appended as they arrive, so there is no "Load more" step.
+   * A newer call (view switch, search, …) cancels an older one.
+   */
+  async load(_more = false) {
+    if (!this.filters) return;
+    const token = ++this.loadToken;
     this.loading = true;
-    if (more) {
-      this.filters!.page++;
-    } else {
-      this.filters!.page = 1;
-    }
+    this.reachedMax = false;
+    this.filters.page = 1;
+    const filters: Filters = { ...this.filters, media_types: [...this.filters.media_types] };
     try {
-      let channels: Channel[] = await invoke("search", { filters: this.filters });
-      if (!more) {
-        this.channels = channels;
-        this.channelsVisible = true;
-        // prevent flicker of hiding opacity
-        this.viewType = this.filters!.view_type;
-      } else {
-        this.channels = this.channels.concat(channels);
+      for (let page = 1; ; page++) {
+        const batch: Channel[] = await invoke("search", { filters: { ...filters, page } });
+        if (token != this.loadToken) return;
+        if (page == 1) {
+          this.channels = batch;
+          this.channelsVisible = true;
+          // prevent flicker of hiding opacity
+          this.viewType = filters.view_type;
+        } else {
+          this.channels = this.channels.concat(batch);
+        }
+        if (batch.length < this.PAGE_SIZE) break;
       }
-      this.reachedMax = channels.length < this.PAGE_SIZE;
+      this.reachedMax = true;
     } catch (e) {
-      this.error.handleError(e);
+      if (token == this.loadToken) this.error.handleError(e);
+    } finally {
+      if (token == this.loadToken) this.loading = false;
     }
-    this.loading = false;
   }
 
   checkScrollTop() {
@@ -299,20 +309,9 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     this.showScrollTop = scrollPosition > 300;
   }
 
-  async checkScrollEnd() {
-    if (this.reachedMax === true || this.loading === true) return;
-    const scrollHeight = document.documentElement.scrollHeight;
-    const scrollTop = window.scrollY || document.documentElement.scrollTop;
-    const clientHeight = window.innerHeight || document.documentElement.clientHeight;
-    if (scrollTop + clientHeight >= scrollHeight * 0.75) {
-      await this.loadMore();
-    }
-  }
-
   @HostListener("window:scroll", ["$event"])
-  async scroll(event: any) {
+  scroll(event: any) {
     this.checkScrollTop();
-    await this.checkScrollEnd();
   }
 
   ngAfterViewInit(): void {
@@ -374,35 +373,26 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
       {
         key: "ctrl + q",
         label: "Media Type Filters",
-        description: "Enable/Disable livestreams",
+        description: "Show livestreams",
         preventDefault: true,
         allowIn: [AllowIn.Input],
-        command: async (_) => {
-          this.chkLiveStream = !this.chkLiveStream;
-          this.updateMediaTypes(MediaType.livestream);
-        },
+        command: async (_) => await this.selectMedia(MediaType.livestream),
       },
       {
         key: "ctrl + w",
         label: "Media Type Filters",
-        description: "Enable/Disable movies",
+        description: "Show movies",
         preventDefault: true,
         allowIn: [AllowIn.Input],
-        command: async (_) => {
-          this.chkMovie = !this.chkMovie;
-          this.updateMediaTypes(MediaType.movie);
-        },
+        command: async (_) => await this.selectMedia(MediaType.movie),
       },
       {
         key: "ctrl + e",
         label: "Media Type Filters",
-        description: "Enable/Disable series",
+        description: "Show series",
         preventDefault: true,
         allowIn: [AllowIn.Input],
-        command: async (_) => {
-          this.chkSerie = !this.chkSerie;
-          this.updateMediaTypes(MediaType.serie);
-        },
+        command: async (_) => await this.selectMedia(MediaType.serie),
       },
       {
         key: "left",
@@ -437,19 +427,46 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     );
   }
 
-  updateMediaTypes(mediaType: MediaType) {
-    let index = this.filters!.media_types.indexOf(mediaType);
-    if (index == -1) this.filters!.media_types.push(mediaType);
-    else this.filters!.media_types.splice(index, 1);
-    this.load();
-    if (this.filters!.view_type == ViewMode.Categories) this.loadGroups();
+  /** Switches the library to exactly one media type (Live, Movies or Series). */
+  async selectMedia(mediaType: MediaType) {
+    if (!this.filters) return;
+    if (mediaType == MediaType.serie && !this.anyXtream()) return;
+    if (mediaType == this.activeMedia && this.filters.media_types.length == 1) return;
+    this.activeMedia = mediaType;
+    this.filters.media_types = [mediaType];
+    try {
+      localStorage.setItem(LAST_MEDIA_TYPE, String(mediaType));
+    } catch {}
+    // A category picked for one media type rarely exists for another.
+    if (this.filters.view_type == ViewMode.Categories) {
+      this.filters.group_id = undefined;
+      this.railGroupName = undefined;
+      this.nodeStack.clear();
+    }
+    await this.load();
+    if (this.filters.view_type == ViewMode.Categories) this.loadGroups();
   }
 
-  toggleMedia(mediaType: MediaType) {
-    if (mediaType == MediaType.livestream) this.chkLiveStream = !this.chkLiveStream;
-    else if (mediaType == MediaType.movie) this.chkMovie = !this.chkMovie;
-    else this.chkSerie = !this.chkSerie;
-    this.updateMediaTypes(mediaType);
+  restoreMedia(): MediaType {
+    let saved: number | undefined;
+    try {
+      const raw = localStorage.getItem(LAST_MEDIA_TYPE);
+      saved = raw == null ? undefined : Number(raw);
+    } catch {}
+    if (saved == MediaType.movie) return MediaType.movie;
+    if (saved == MediaType.serie && this.anyXtream()) return MediaType.serie;
+    return MediaType.livestream;
+  }
+
+  readonly mediaOptions = [
+    { type: MediaType.livestream, label: "Live" },
+    { type: MediaType.movie, label: "Movies" },
+    { type: MediaType.serie, label: "Series" },
+  ];
+
+  visibleMediaOptions() {
+    if (this.anyXtream()) return this.mediaOptions;
+    return [this.mediaOptions[0], { type: MediaType.movie, label: "Movies & Series" }];
   }
 
   filtersVisible() {
@@ -599,8 +616,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
       return;
     }
     if (next >= this.channels.length) {
-      if (!this.reachedMax && !this.loading) await this.loadMore();
-      next = Math.min(next, this.channels.length - 1);
+      next = this.channels.length - 1;
       if (next < 0) return;
     }
     this.focusAt(FocusArea.Tiles, next);
@@ -729,6 +745,20 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
     return `Search ${this.pageTitle()}…`;
   }
 
+  countNoun(): string {
+    if (this.showRail() && !this.filters?.group_id) return "categories";
+    if (this.filters?.season) return "episodes";
+    if (this.filters?.series_id) return "seasons";
+    switch (this.activeMedia) {
+      case MediaType.movie:
+        return "movies";
+      case MediaType.serie:
+        return "series";
+      default:
+        return "channels";
+    }
+  }
+
   emptyHint(): string {
     if (this.filters?.query) return "No results — try a different search or turn on keyword search.";
     switch (this.filters?.view_type) {
@@ -739,7 +769,7 @@ export class HomeComponent implements AfterViewInit, OnDestroy {
       case ViewMode.Hidden:
         return "Hidden channels and categories show up here.";
       default:
-        return "Check that at least one media type is selected.";
+        return "Try switching between Live, Movies and Series.";
     }
   }
 

@@ -22,6 +22,7 @@ import { Source } from "../models/source";
 import { SourceType } from "../models/sourceType";
 import { SortType } from "../models/sortType";
 import { ViewMode } from "../models/viewMode";
+import { EpgService } from "../epg.service";
 
 /** One programme block positioned on the timeline. */
 export interface GuideProgramme {
@@ -45,7 +46,6 @@ const PAGE_SIZE = 36;
 const PX_PER_MIN = 5;
 const WINDOW_BEFORE_MIN = 120; // how far back the timeline starts
 const WINDOW_LENGTH_MIN = 26 * 60;
-const MAX_PARALLEL_EPG = 4;
 
 @Component({
   selector: "app-guide",
@@ -80,8 +80,6 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
   playingId?: number;
   busy = false;
 
-  private queue: Channel[] = [];
-  private inFlight = 0;
   private observer?: IntersectionObserver;
   private subs: Subscription[] = [];
   private search$ = new Subject<string>();
@@ -93,6 +91,7 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
     private error: ErrorService,
     private router: Router,
     private zone: NgZone,
+    private epg: EpgService,
   ) {
     this.buildTimeline();
   }
@@ -124,7 +123,6 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
     this.observer?.disconnect();
     this.subs.forEach((s) => s.unsubscribe());
     if (this.clock) clearInterval(this.clock);
-    this.queue = [];
   }
 
   /* ---------------- data ---------------- */
@@ -183,7 +181,6 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
     this.page = 1;
     this.reachedMax = false;
     this.channels = [];
-    this.queue = [];
     this.selected = undefined;
     this.scroller?.nativeElement.scrollTo({ top: 0 });
     await this.loadPage();
@@ -218,37 +215,18 @@ export class GuideComponent implements AfterViewInit, OnDestroy {
         if (!entry.isIntersecting) continue;
         const id = Number((entry.target as HTMLElement).dataset["id"]);
         const channel = this.channels.find((c) => c.id == id);
-        if (channel && !this.epgState.has(id)) {
-          this.epgState.set(id, "loading");
-          this.queue.push(channel);
-        }
         this.observer?.unobserve(entry.target);
+        if (!channel || this.epgState.has(id)) continue;
+        this.epgState.set(id, "loading");
+        this.epg
+          .get(channel)
+          .then((data) => {
+            this.programmes.set(id, this.layout(data));
+            this.epgState.set(id, "done");
+          })
+          .catch(() => this.epgState.set(id, "error"));
       }
-      this.pump();
     });
-  }
-
-  private pump() {
-    while (this.inFlight < MAX_PARALLEL_EPG && this.queue.length > 0) {
-      const channel = this.queue.shift()!;
-      this.inFlight++;
-      this.fetchEpg(channel).finally(() => {
-        this.inFlight--;
-        this.pump();
-      });
-    }
-  }
-
-  private async fetchEpg(channel: Channel) {
-    try {
-      const data: EPG[] = await invoke("get_epg", { channel });
-      this.zone.run(() => {
-        this.programmes.set(channel.id!, this.layout(data));
-        this.epgState.set(channel.id!, "done");
-      });
-    } catch {
-      this.zone.run(() => this.epgState.set(channel.id!, "error"));
-    }
   }
 
   private layout(data: EPG[]): GuideProgramme[] {
