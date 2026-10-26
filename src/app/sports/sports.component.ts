@@ -11,7 +11,7 @@ import { SourceType } from "../models/sourceType";
 import { SortType } from "../models/sortType";
 import { ViewMode } from "../models/viewMode";
 import { Country, countryOf, OTHER_COUNTRY } from "../countries";
-import { SPORTS, Sport, classify, eventKey, isExtra, isLiveTagged, isSportsChannel } from "../sports";
+import { SPORTS, Sport, classify, eventKey, isExtra, isLiveTagged, isSportsChannel, variantKey } from "../sports";
 
 /** One game/broadcast, possibly available on several channels. */
 export interface SportEvent {
@@ -35,7 +35,9 @@ interface SportSection {
 const PAGE_SIZE = 36;
 const HORIZON_S = 4 * 3600;
 const RESCAN_AFTER_MS = 25 * 60 * 1000;
-const COUNTRY_KEY = "sportsCountry";
+const COUNTRY_KEY = "sportsCountry2";
+/** Channels checked per batch, so the provider isn't flooded with listing requests. */
+const SCAN_BATCH = 60;
 const EXTRAS_KEY = "sportsShowExtras";
 
 @Component({
@@ -53,6 +55,10 @@ export class SportsComponent implements OnInit, OnDestroy {
   private listings = new Map<number, EPG[]>();
   private failed = new Set<number>();
   private requested = new Set<number>();
+  /** One channel per name (HD/SD/backup copies share listings) → all its copies. */
+  private variants = new Map<number, Channel[]>();
+  private scope: Channel[] = [];
+  scanLimit = SCAN_BATCH;
   private lastScan = 0;
 
   countries: { country: Country; count: number }[] = [];
@@ -78,7 +84,7 @@ export class SportsComponent implements OnInit, OnDestroy {
     private router: Router,
   ) {
     try {
-      this.countryKey = localStorage.getItem(COUNTRY_KEY) ?? "all";
+      this.countryKey = localStorage.getItem(COUNTRY_KEY) ?? "";
       this.showExtras = localStorage.getItem(EXTRAS_KEY) == "true";
     } catch {}
   }
@@ -153,11 +159,49 @@ export class SportsComponent implements OnInit, OnDestroy {
         if (c.favorite) favorites.push(c);
         else if (isSportsChannel(c.name, this.groupName(c))) sports.push(c);
       }
-      this.candidates = favorites.concat(sports);
+      this.candidates = this.collapseVariants(favorites.concat(sports));
       this.buildCountries();
+      if (!this.countryKey) this.countryKey = this.defaultCountry(favorites);
+      this.updateScope();
     } catch (e) {
       this.error.handleError(e);
     }
+  }
+
+  /** "DK: TV 2 SPORT ᴴᴰ", "DK: TV 2 SPORT SD" and "… BACKUP" are the same channel with the same listings. */
+  private collapseVariants(channels: Channel[]): Channel[] {
+    const byKey = new Map<string, Channel[]>();
+    for (const c of channels) {
+      const key = variantKey(c.name);
+      const list = byKey.get(key) ?? [];
+      if (!list.some((x) => x.id == c.id)) list.push(c);
+      byKey.set(key, list);
+    }
+    const reps: Channel[] = [];
+    for (const list of byKey.values()) {
+      list.sort((a, b) => this.channelRank(a) - this.channelRank(b));
+      this.variants.set(list[0].id!, list);
+      reps.push(list[0]);
+    }
+    // favourites first, as collected
+    return reps.sort((a, b) => Number(!!b.favorite) - Number(!!a.favorite));
+  }
+
+  /** The country most of your favourites are from (else the one with most sports channels). */
+  private defaultCountry(favorites: Channel[]): string {
+    const tally = (list: Channel[]) => {
+      const counts = new Map<string, number>();
+      list.forEach((c) => {
+        const key = this.countryOfChannel(c).key;
+        if (key != "OTHER") counts.set(key, (counts.get(key) ?? 0) + 1);
+      });
+      return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    };
+    return tally(favorites) ?? tally(this.candidates) ?? "all";
+  }
+
+  private updateScope() {
+    this.scope = this.candidates.filter((c) => this.inScope(c));
   }
 
   private groupName(c: Channel): string | undefined {
@@ -180,15 +224,25 @@ export class SportsComponent implements OnInit, OnDestroy {
     this.countries = [...counts.values()].sort(
       (a, b) => rank(a.country) - rank(b.country) || a.country.name.localeCompare(b.country.name),
     );
-    if (this.countryKey != "all" && !counts.has(this.countryKey)) this.countryKey = "all";
+    if (this.countryKey && this.countryKey != "all" && !counts.has(this.countryKey)) this.countryKey = "";
   }
 
   private inScope(c: Channel): boolean {
     return this.countryKey == "all" || this.countryOfChannel(c).key == this.countryKey;
   }
 
+  /** The channels being checked right now (favourites first, at most `scanLimit`). */
   scopeChannels(): Channel[] {
-    return this.candidates.filter((c) => this.inScope(c));
+    return this.scope.slice(0, this.scanLimit);
+  }
+
+  get remainingCount(): number {
+    return Math.max(0, this.scope.length - this.scanLimit);
+  }
+
+  checkMore() {
+    this.scanLimit += SCAN_BATCH;
+    this.scan();
   }
 
   /* ---------------- listings ---------------- */
@@ -245,6 +299,7 @@ export class SportsComponent implements OnInit, OnDestroy {
     for (const c of this.scopeChannels()) {
       const list = this.listings.get(c.id!);
       if (!list) continue;
+      const copies = this.variants.get(c.id!) ?? [c];
       const sportsChannel = isSportsChannel(c.name, this.groupName(c));
       for (const slot of EpgService.slots(list)) {
         if (slot.end <= now || slot.start > now + HORIZON_S) continue;
@@ -256,7 +311,7 @@ export class SportsComponent implements OnInit, OnDestroy {
         const key = eventKey(title, 0);
         const existing = [...(byTitle.get(key) ?? [])].find((e) => slot.start < e.end && e.start < slot.end);
         if (existing) {
-          if (!existing.channels.some((x) => x.id == c.id)) existing.channels.push(c);
+          for (const copy of copies) if (!existing.channels.some((x) => x.id == copy.id)) existing.channels.push(copy);
           existing.start = Math.min(existing.start, slot.start);
           existing.end = Math.max(existing.end, slot.end);
           continue;
@@ -270,7 +325,7 @@ export class SportsComponent implements OnInit, OnDestroy {
           end: slot.end,
           liveTag: isLiveTagged(title),
           extra: isExtra(title),
-          channels: [c],
+          channels: [...copies],
         });
         byTitle.set(key, [...(byTitle.get(key) ?? []), events.get(key + "|" + slot.start)!]);
       }
@@ -379,7 +434,10 @@ export class SportsComponent implements OnInit, OnDestroy {
   }
 
   setCountry(key: string) {
+    if (key == this.countryKey) return;
     this.countryKey = key;
+    this.scanLimit = SCAN_BATCH;
+    this.updateScope();
     try {
       localStorage.setItem(COUNTRY_KEY, key);
     } catch {}

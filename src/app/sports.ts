@@ -141,3 +141,13 @@ export function eventKey(title: string, start: number): string {
     .trim();
   return `${norm}|${Math.round(start / 900)}`;
 }
+
+/** Name without quality/backup tags, to spot copies of the same channel. */
+export function variantKey(name?: string): string {
+  return (name ?? "")
+    .toLowerCase()
+    .replace(/[ᴴᴰʳᵃʷˢᴰᶠᵁ⁴ᴷ]+/g, " ")
+    .replace(/\b(fhd|uhd|hd|sd|4k|8k|hevc|h\.?265|50 ?fps|60 ?fps|backup|bkp|alt|raw|multi|\d{3,4}p)\b/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}

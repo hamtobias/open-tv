@@ -5,7 +5,12 @@ import { EPG } from "./models/epg";
 import { MediaType } from "./models/mediaType";
 import { MemoryService } from "./memory.service";
 
-const MAX_PARALLEL = 6;
+/** Keep load on the provider low: some block accounts that send many requests quickly. */
+const MAX_PARALLEL = 3;
+const MAX_PARALLEL_BACKGROUND = 2;
+const BACKGROUND_GAP_MS = 400;
+/** A card must stay on screen this long before its listings are requested (skips fast scrolling). */
+const DWELL_MS = 450;
 const FRESH_FOR_MS = 30 * 60 * 1000;
 const MIN_LENGTH_S = 2 * 60;
 
@@ -47,6 +52,10 @@ export class EpgService {
   private visible: Job[] = [];
   private background: Job[] = [];
   private inFlight = 0;
+  private backgroundInFlight = 0;
+  private lastBackgroundStart = 0;
+  private wakeTimer?: ReturnType<typeof setTimeout>;
+  private dwellTimers = new Map<Element, ReturnType<typeof setTimeout>>();
 
   private observer?: IntersectionObserver;
   private callbacks = new Map<Element, () => void>();
@@ -103,21 +112,43 @@ export class EpgService {
   }
 
   private pump() {
-    while (this.inFlight < MAX_PARALLEL && (this.visible.length > 0 || this.background.length > 0)) {
-      const job = this.visible.length > 0 ? this.visible.pop()! : this.background.shift()!;
+    while (this.inFlight < MAX_PARALLEL) {
+      let job: Job | undefined;
+      let background = false;
+      if (this.visible.length > 0) job = this.visible.pop();
+      else if (this.background.length > 0 && this.backgroundInFlight < MAX_PARALLEL_BACKGROUND) {
+        const wait = this.lastBackgroundStart + BACKGROUND_GAP_MS - Date.now();
+        if (wait > 0) {
+          // space background requests out instead of firing them all at once
+          if (!this.wakeTimer)
+            this.wakeTimer = setTimeout(() => {
+              this.wakeTimer = undefined;
+              this.pump();
+            }, wait);
+          return;
+        }
+        job = this.background.shift();
+        background = true;
+        this.lastBackgroundStart = Date.now();
+        this.backgroundInFlight++;
+      }
+      if (!job) return;
+      const current = job;
       this.inFlight++;
-      invoke<EPG[]>("get_epg", { channel: job.channel })
+      invoke<EPG[]>("get_epg", { channel: current.channel })
         .then((data) => {
-          this.cache.set(job.channel.id!, { data, fetched: Date.now() });
-          this.zone.run(() => job.resolve(data));
+          this.cache.set(current.channel.id!, { data, fetched: Date.now() });
+          this.zone.run(() => current.resolve(data));
         })
-        .catch((e) => this.zone.run(() => job.reject(e)))
+        .catch((e) => this.zone.run(() => current.reject(e)))
         .finally(() => {
           this.inFlight--;
+          if (background) this.backgroundInFlight--;
           this.pump();
         });
     }
   }
+
 
   /**
    * Sorted, non-overlapping programmes. Providers often send duplicates or
@@ -160,13 +191,25 @@ export class EpgService {
       this.observer = new IntersectionObserver(
         (entries) => {
           for (const entry of entries) {
-            if (!entry.isIntersecting) continue;
-            const cb = this.callbacks.get(entry.target);
-            this.unobserve(entry.target);
-            if (cb) this.zone.run(cb);
+            const el = entry.target;
+            if (!entry.isIntersecting) {
+              clearTimeout(this.dwellTimers.get(el));
+              this.dwellTimers.delete(el);
+              continue;
+            }
+            if (this.dwellTimers.has(el)) continue;
+            this.dwellTimers.set(
+              el,
+              setTimeout(() => {
+                this.dwellTimers.delete(el);
+                const cb = this.callbacks.get(el);
+                this.unobserve(el);
+                if (cb) this.zone.run(cb);
+              }, DWELL_MS),
+            );
           }
         },
-        { rootMargin: "200px 0px" },
+        { rootMargin: "0px" },
       );
     }
     this.callbacks.set(el, visible);
@@ -174,6 +217,8 @@ export class EpgService {
   }
 
   unobserve(el: Element) {
+    clearTimeout(this.dwellTimers.get(el));
+    this.dwellTimers.delete(el);
     this.callbacks.delete(el);
     this.observer?.unobserve(el);
   }

@@ -1606,3 +1606,12 @@ textarea {
 .sp-more:focus-visible {
   box-shadow: var(--focus-ring);
 }
+.sp-more-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 28px;
+  font-size: 13px;
+  color: var(--text-2);
+}

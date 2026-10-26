@@ -115,11 +115,18 @@
           <div class="sp-card skeleton" *ngFor="let _ of [1, 2, 3, 4, 5, 6]"></div>
         </div>
 
+        <div class="sp-more-row" *ngIf="!loadingChannels && !scanning && remainingCount > 0">
+          <span>Checked {{ scopeCount }} channels · {{ remainingCount }} more sports channels{{ countryKey != "all" ? " in this country" : "" }}</span>
+          <button type="button" class="btn btn-secondary btn-sm" (click)="checkMore()">
+            Check {{ remainingCount < 60 ? remainingCount : 60 }} more
+          </button>
+        </div>
+
         <div class="empty-state" *ngIf="sections.length == 0 && !loadingChannels && !scanning">
           <h5>No sports on right now</h5>
           <p *ngIf="scopeCount == 0">No sports channels or favourites found{{ countryKey != "all" ? " for this country" : "" }}.</p>
           <p *ngIf="scopeCount > 0">
-            Nothing found on {{ scopeCount }} sports channels in the next 4 hours.
+            Nothing found on {{ scopeCount }} channels in the next 4 hours.
             <ng-container *ngIf="!showExtras">Studio shows and highlights are hidden.</ng-container>
           </p>
         </div>
